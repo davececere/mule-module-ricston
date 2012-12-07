@@ -13,9 +13,11 @@ import org.mule.api.context.MuleContextAware;
 import org.mule.api.lifecycle.Initialisable;
 import org.mule.api.lifecycle.InitialisationException;
 import org.mule.api.store.ListableObjectStore;
+import org.mule.api.store.ObjectAlreadyExistsException;
 import org.mule.api.store.ObjectStoreException;
 import org.mule.api.store.ObjectStoreManager;
 import org.mule.api.transaction.Transaction;
+import org.mule.api.transaction.TransactionException;
 import org.mule.transaction.TransactionCoordination;
 
 import java.io.Serializable;
@@ -97,11 +99,12 @@ public class TransactionAwareObjectStore<T extends Serializable> implements List
     public void store(Serializable key, T value) throws ObjectStoreException {
 
         Transaction tx = TransactionCoordination.getInstance().getTransaction();
-
         try {
-            if (tx == null || tx.getStatus() == Transaction.STATUS_COMMITTING)
+            if (tx == null || tx.getStatus() == Transaction.STATUS_COMMITTING) {
                 getStore().store(key, value);
+            }
             else {
+
                 final Serializable finalId = key;
                 final Serializable finalValue = value;
 
@@ -122,8 +125,11 @@ public class TransactionAwareObjectStore<T extends Serializable> implements List
                         return null;
                     }
                 });
-
-                tx.bindResource(this.getClass().getName(), session);
+                //check if this key is or will be inserted by other transactions
+                //if (session.willExist(key)) {
+                //    throw new ObjectAlreadyExistsException();
+                //}
+                tx.bindResource(this.getClass().getName(), session);          
             }
 
         } catch (Exception e) {

@@ -33,6 +33,7 @@ public class ObjectStoreXAResourceManager extends AbstractXAResourceManager {
     private MuleContext muleContext;
     private List<Xid> preparedTransactions;
     private ListableObjectStore<Serializable> transactionLog;
+    private ListableObjectStore<Serializable> transactionValuesLog;
 
     public ObjectStore getTransactionLog() {
         return transactionLog;
@@ -58,7 +59,10 @@ public class ObjectStoreXAResourceManager extends AbstractXAResourceManager {
         transactionLog = ((ObjectStoreManager) muleContext.getRegistry()
                 .get(MuleProperties.OBJECT_STORE_MANAGER))
                 .getObjectStore("transaction-log", true);
-
+        transactionValuesLog = ((ObjectStoreManager) muleContext.getRegistry()
+                .get(MuleProperties.OBJECT_STORE_MANAGER))
+                .getObjectStore("transaction-value-log", true); 
+        transactionValuesLog.open();
         transactionLog.open();
     }
 
@@ -86,17 +90,28 @@ public class ObjectStoreXAResourceManager extends AbstractXAResourceManager {
             objectOutputStream.close();
 
             synchronized (this) {
-                // we assume that if the object is found in the transactionLog than that object will be committed
-                if (objectStore.contains(obj.getKey()) || transactionLog.contains(encodedTransactionId)) {
+                if (willExist(obj.getKey(),context)) {
                     throw new ObjectAlreadyExistsException();
                 }
                 transactionLog.store(encodedTransactionId, obj.getKey() + ":" + obj.getValue() + ":" + encode(byteArrayOutputStream.toByteArray()));
+                transactionValuesLog.store(obj.getKey(), encodedTransactionId);
             }
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
 
         return 0;
+    }
+    
+    private boolean willExist(Serializable key,AbstractTransactionContext context) throws Exception{
+        Xid xid = getXid(context);
+        String encodedTransactionId = encode(xid.getGlobalTransactionId());
+        // we assume that if the object is found in the transactionLog than that object will be committed
+        if (objectStore.contains(key) || transactionLog.contains(encodedTransactionId) || transactionValuesLog.contains(key)) {
+            return true;
+        }else {
+            return false;
+        }
     }
 
     @Override
@@ -123,6 +138,8 @@ public class ObjectStoreXAResourceManager extends AbstractXAResourceManager {
         try {
             synchronized (this) {
                 objectStore.store(objectStoreTransactionContext.getObject().getKey(), objectStoreTransactionContext.getObject().getValue());
+                if(transactionValuesLog.contains(objectStoreTransactionContext.getObject().getKey()))
+                    transactionValuesLog.remove(objectStoreTransactionContext.getObject().getKey());
             }
             transactionLog.remove(encode(getXid(transactionContext).getGlobalTransactionId()));
         } catch (Exception e) {
@@ -133,13 +150,18 @@ public class ObjectStoreXAResourceManager extends AbstractXAResourceManager {
     @Override
     protected void doRollback(AbstractTransactionContext transactionContext) throws ResourceManagerException {
         Xid xid = getXid(transactionContext);
-
         try {
             if (xid != null) {
                 String encodedXid = encode(xid.getGlobalTransactionId());
 
                 if (transactionLog.contains(encodedXid)) {
                     transactionLog.remove(encodedXid);
+                }
+                Serializable key = ((ObjectStoreTransactionContext) transactionContext).getObject().getKey();
+                synchronized (this) {
+                    if(transactionValuesLog.contains(key)){
+                        transactionValuesLog.remove(key);
+                    }
                 }
             }
         } catch (Exception e) {
@@ -193,7 +215,9 @@ public class ObjectStoreXAResourceManager extends AbstractXAResourceManager {
     }
 
     private String encode(byte[] source) throws Exception {
-        return Base64.encodeBytes(source);
+        //this string will eventually be used as a file name. 
+        //newline chars in file names can cause differences in filenames expected and those actually created. so we turn them off
+        return Base64.encodeBytes(source,Base64.DONT_BREAK_LINES); 
     }
 
     private byte[] decode(String string) {
