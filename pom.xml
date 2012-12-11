@@ -8,7 +8,7 @@
     <artifactId>mule-module-ricston</artifactId>
     <packaging>jar</packaging>
     <name>Mule Ricston Module</name>
-    <version>1.1.1</version>
+    <version>1.1-jumptap</version>
     <description>A module aimed at solving common problems in Mule</description>
     <url>https://github.com/Ricston/mule-module-ricston</url>
 
