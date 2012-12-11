@@ -23,7 +23,6 @@ public class ObjectStoreXAResourceManager extends AbstractXAResourceManager {
 
     private TransactionAwareObjectStore objectStore;
     private MuleContext muleContext;
-    private static Logger logger = Logger.getLogger("lifecycle");
 
 
     public MuleContext getMuleContext() {
@@ -50,9 +49,16 @@ public class ObjectStoreXAResourceManager extends AbstractXAResourceManager {
     }
 
 
+    /*
+     * called by the framework during rollback.
+     * 
+     * since we are doing the actual store() during the transaction begin (object.store()) call, we need to undo that here.
+     * 
+     * (non-Javadoc)
+     * @see org.mule.util.xa.AbstractResourceManager#doRollback(org.mule.util.xa.AbstractTransactionContext)
+     */
     @Override
     protected void doRollback(AbstractTransactionContext transactionContext) throws ResourceManagerException {
-        logger.debug("rm rollback");
         Serializable key = ((ObjectStoreTransactionContext)transactionContext).getObject().getKey();
 
         try {
@@ -64,20 +70,34 @@ public class ObjectStoreXAResourceManager extends AbstractXAResourceManager {
         transactionContext.doRollback();
     }
 
+    /*
+     * called by framework at beginning of transaction, which is the same callstack as initial store() call on object store
+     * (non-Javadoc)
+     * @see org.mule.util.xa.AbstractResourceManager#doBegin(org.mule.util.xa.AbstractTransactionContext)
+     */
     @Override
     protected void doBegin(AbstractTransactionContext context) {
-        logger.debug("rm begin");
     }
 
+    /*
+     * called by framework right before commit. Failure here dirties the thread so it never works again, don't let that happen.
+     * 
+     * For this reason, we do all of the work during objectstore.store() and/or begin. At this point we're really not doing anything to commit
+     * (non-Javadoc)
+     * @see org.mule.util.xa.AbstractResourceManager#doPrepare(org.mule.util.xa.AbstractTransactionContext)
+     */
     @Override
     protected int doPrepare(AbstractTransactionContext context) {
-        logger.debug("rm prepare");
         return XAResource.XA_OK;
     }
 
+    /*
+     * Since we do everything during objectStore.store() we don't need to do anything here
+     * (non-Javadoc)
+     * @see org.mule.util.xa.AbstractResourceManager#doCommit(org.mule.util.xa.AbstractTransactionContext)
+     */
     @Override
     protected void doCommit(AbstractTransactionContext context) throws ResourceManagerException {
-        logger.debug("rm commit");
         context.doCommit();
     }
 

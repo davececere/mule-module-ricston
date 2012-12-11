@@ -34,7 +34,6 @@ public class TransactionAwareObjectStore<T extends Serializable> implements List
     private int maxEntries = 0;
     private int entryTTL;
     private int expirationInterval;
-    private static Logger logger = Logger.getLogger("lifecycle");
 
     public ObjectStoreXAResourceManager getResourceManager() {
         return resourceManager;
@@ -87,7 +86,6 @@ public class TransactionAwareObjectStore<T extends Serializable> implements List
 
     @Override
     public void initialise() throws InitialisationException {
-        logger.debug("objstore init");
         try {
             resourceManager = new ObjectStoreXAResourceManager(this, muleContext);
             resourceManager.start();
@@ -98,9 +96,16 @@ public class TransactionAwareObjectStore<T extends Serializable> implements List
 
     @Override
     public void store(Serializable key, T value) throws ObjectStoreException {
-        logger.debug("objstore store");
         Transaction tx = TransactionCoordination.getInstance().getTransaction();
-        getStore().store(key, value);
+        
+        /*
+         * some stores dont use synchronized, so we do that here.
+         * This is important because we need to fail right now on storage so caller knows of conflict via ObjectAlreadyExistsException.
+         * IdempotentFilter, for example, looks for this.
+         */
+        synchronized(getStore()){
+            getStore().store(key, value);
+        }
         try {
             final Serializable finalId = key;
             final Serializable finalValue = value;
@@ -137,7 +142,6 @@ public class TransactionAwareObjectStore<T extends Serializable> implements List
 
     @Override
     public void open() throws ObjectStoreException {
-        logger.debug("objstore open");
         ListableObjectStore<T> store = getStore();
         if (store != null) {
             store.open();
@@ -146,7 +150,6 @@ public class TransactionAwareObjectStore<T extends Serializable> implements List
 
     @Override
     public void close() throws ObjectStoreException {
-        logger.debug("objstore close");
         ListableObjectStore<T> store = getStore();
         if (store != null) {
             getStore().close();

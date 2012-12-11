@@ -34,12 +34,12 @@ public class ObjectStoreTransactionContext extends AbstractTransactionContext {
 
     @Override
     public void doCommit() throws ResourceManagerException {
-        logger.debug("tx context commit");
+        //commit handled in resource manager
     }
 
     @Override
     public void doRollback() throws ResourceManagerException {
-        logger.debug("tx context rollback");
+        //rollback handled in resource manager
     }
 
 }
