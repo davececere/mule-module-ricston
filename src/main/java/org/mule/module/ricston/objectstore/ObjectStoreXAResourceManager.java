@@ -7,36 +7,24 @@
  */
 package org.mule.module.ricston.objectstore;
 
+import org.apache.log4j.Logger;
 import org.mule.api.MuleContext;
-import org.mule.api.config.MuleProperties;
 import org.mule.api.store.*;
-import org.mule.util.Base64;
 import org.mule.util.xa.AbstractTransactionContext;
 import org.mule.util.xa.AbstractXAResourceManager;
 import org.mule.util.xa.ResourceManagerException;
 import org.mule.util.xa.ResourceManagerSystemException;
 
-import javax.transaction.Status;
-import javax.transaction.xa.Xid;
 import java.io.*;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+
+import javax.transaction.xa.XAResource;
 
 public class ObjectStoreXAResourceManager extends AbstractXAResourceManager {
 
-    private static final int KEY_RECORD_INDEX = 0;
-    private static final int VALUE_RECORD_INDEX = 1;
-    private static final int XID_RECORD_INDEX = 2;
-
     private TransactionAwareObjectStore objectStore;
     private MuleContext muleContext;
-    private List<Xid> preparedTransactions;
-    private ListableObjectStore<Serializable> transactionLog;
+    private static Logger logger = Logger.getLogger("lifecycle");
 
-    public ObjectStore getTransactionLog() {
-        return transactionLog;
-    }
 
     public MuleContext getMuleContext() {
         return muleContext;
@@ -52,14 +40,8 @@ public class ObjectStoreXAResourceManager extends AbstractXAResourceManager {
 
     public ObjectStoreXAResourceManager(TransactionAwareObjectStore objectStore, MuleContext muleContext) throws ObjectStoreException {
         super();
-        preparedTransactions = new ArrayList<Xid>();
         this.objectStore = objectStore;
         this.muleContext = muleContext;
-        transactionLog = ((ObjectStoreManager) muleContext.getRegistry()
-                .get(MuleProperties.OBJECT_STORE_MANAGER))
-                .getObjectStore("transaction-log", true);
-
-        transactionLog.open();
     }
 
     @Override
@@ -67,137 +49,36 @@ public class ObjectStoreXAResourceManager extends AbstractXAResourceManager {
         return new ObjectStoreTransactionContext(((ObjectStoreXASession) session).getObject());
     }
 
+
+    @Override
+    protected void doRollback(AbstractTransactionContext transactionContext) throws ResourceManagerException {
+        logger.debug("rm rollback");
+        Serializable key = ((ObjectStoreTransactionContext)transactionContext).getObject().getKey();
+
+        try {
+            if(getObjectStore().contains(key))
+                getObjectStore().remove(key);
+        } catch (ObjectStoreException e) {
+            throw new ResourceManagerException(e);
+        }     
+        transactionContext.doRollback();
+    }
+
     @Override
     protected void doBegin(AbstractTransactionContext context) {
-
+        logger.debug("rm begin");
     }
 
     @Override
     protected int doPrepare(AbstractTransactionContext context) {
-
-        try {
-            ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-            ObjectOutputStream objectOutputStream = new ObjectOutputStream(byteArrayOutputStream);
-            Map.Entry<Serializable, Serializable> obj = ((ObjectStoreTransactionContext) context).getObject();
-            Xid xid = getXid(context);
-            String encodedTransactionId = encode(xid.getGlobalTransactionId());
-
-            objectOutputStream.writeObject(xid);
-            objectOutputStream.close();
-
-            synchronized (this) {
-                // we assume that if the object is found in the transactionLog than that object will be committed
-                if (objectStore.contains(obj.getKey()) || transactionLog.contains(encodedTransactionId)) {
-                    throw new ObjectAlreadyExistsException();
-                }
-                transactionLog.store(encodedTransactionId, obj.getKey() + ":" + obj.getValue() + ":" + encode(byteArrayOutputStream.toByteArray()));
-            }
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-
-        return 0;
+        logger.debug("rm prepare");
+        return XAResource.XA_OK;
     }
 
     @Override
-    public void recover() throws ResourceManagerSystemException {
-        try {
-            String record;
-
-            for (Serializable key : ((ListableObjectStore<Serializable>) transactionLog).allKeys()) {
-                record = (String) transactionLog.retrieve(key);
-                restoreTransactionState(record.split(":"));
-            }
-        } catch (Exception e) {
-            throw new ResourceManagerSystemException(e);
-        }
-    }
-
-    public Xid[] getPreparedTransactions() {
-        return preparedTransactions.toArray(new Xid[preparedTransactions.size()]);
-    }
-
-    @Override
-    protected void doCommit(AbstractTransactionContext transactionContext) throws ResourceManagerException {
-        ObjectStoreTransactionContext objectStoreTransactionContext = (ObjectStoreTransactionContext) transactionContext;
-        try {
-            synchronized (this) {
-                objectStore.store(objectStoreTransactionContext.getObject().getKey(), objectStoreTransactionContext.getObject().getValue());
-            }
-            transactionLog.remove(encode(getXid(transactionContext).getGlobalTransactionId()));
-        } catch (Exception e) {
-            throw new ResourceManagerSystemException(e);
-        }
-    }
-
-    @Override
-    protected void doRollback(AbstractTransactionContext transactionContext) throws ResourceManagerException {
-        Xid xid = getXid(transactionContext);
-
-        try {
-            if (xid != null) {
-                String encodedXid = encode(xid.getGlobalTransactionId());
-
-                if (transactionLog.contains(encodedXid)) {
-                    transactionLog.remove(encodedXid);
-                }
-            }
-        } catch (Exception e) {
-            throw new ResourceManagerSystemException(e);
-        }
-    }
-
-    private Xid deserializeXid(String serializedXid) throws Exception {
-        ByteArrayInputStream xidInputStream = new ByteArrayInputStream(decode(serializedXid));
-        return (Xid) new ObjectInputStream(xidInputStream).readObject();
-    }
-
-    private void restoreTransactionState(final String[] record) throws Exception {
-
-        Xid xid = deserializeXid(record[XID_RECORD_INDEX]);
-        preparedTransactions.add(xid);
-
-        Map.Entry object = new Map.Entry() {
-            @Override
-            public Object getKey() {
-                return record[KEY_RECORD_INDEX];
-            }
-
-            @Override
-            public Object getValue() {
-                return record[VALUE_RECORD_INDEX];
-            }
-
-            @Override
-            public Object setValue(Object o) {
-                return null;
-            }
-        };
-
-        ObjectStoreTransactionContext transactionContext = new ObjectStoreTransactionContext(object);
-        transactionContext.setStatus(Status.STATUS_PREPARED);
-
-        activeContexts.put(xid, transactionContext);
-    }
-
-    private Xid getXid(AbstractTransactionContext transactionContext) {
-
-        if (activeContexts.containsValue(transactionContext)) {
-            for (Object entry : activeContexts.entrySet()) {
-                if (((Map.Entry) entry).getValue().equals(transactionContext)) {
-                    return (Xid) ((Map.Entry) entry).getKey();
-                }
-            }
-        }
-        return null;
-    }
-
-    private String encode(byte[] source) throws Exception {
-        return Base64.encodeBytes(source);
-    }
-
-    private byte[] decode(String string) {
-        return Base64.decode(string);
+    protected void doCommit(AbstractTransactionContext context) throws ResourceManagerException {
+        logger.debug("rm commit");
+        context.doCommit();
     }
 
 }

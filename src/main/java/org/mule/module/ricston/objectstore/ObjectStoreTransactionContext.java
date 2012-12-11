@@ -7,6 +7,7 @@
  */
 package org.mule.module.ricston.objectstore;
 
+import org.apache.log4j.Logger;
 import org.mule.util.xa.AbstractTransactionContext;
 import org.mule.util.xa.ResourceManagerException;
 
@@ -16,6 +17,7 @@ import java.util.Map;
 public class ObjectStoreTransactionContext extends AbstractTransactionContext {
 
     private Map.Entry<Serializable, Serializable> object;
+    private static Logger logger = Logger.getLogger("lifecycle");
 
     public Map.Entry<Serializable, Serializable> getObject() {
         return object;
@@ -32,12 +34,12 @@ public class ObjectStoreTransactionContext extends AbstractTransactionContext {
 
     @Override
     public void doCommit() throws ResourceManagerException {
-
+        logger.debug("tx context commit");
     }
 
     @Override
     public void doRollback() throws ResourceManagerException {
-
+        logger.debug("tx context rollback");
     }
 
 }

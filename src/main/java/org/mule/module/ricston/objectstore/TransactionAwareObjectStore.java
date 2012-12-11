@@ -7,6 +7,7 @@
  */
 package org.mule.module.ricston.objectstore;
 
+import org.apache.log4j.Logger;
 import org.mule.api.MuleContext;
 import org.mule.api.config.MuleProperties;
 import org.mule.api.context.MuleContextAware;
@@ -33,6 +34,7 @@ public class TransactionAwareObjectStore<T extends Serializable> implements List
     private int maxEntries = 0;
     private int entryTTL;
     private int expirationInterval;
+    private static Logger logger = Logger.getLogger("lifecycle");
 
     public ObjectStoreXAResourceManager getResourceManager() {
         return resourceManager;
@@ -79,12 +81,13 @@ public class TransactionAwareObjectStore<T extends Serializable> implements List
     }
 
     public TransactionAwareObjectStore() {
-        this.setStoreName(MuleProperties.OBJECT_STORE_DEFAULT_PERSISTENT_NAME);
-        this.setPersistent(true);
+        this.setStoreName(MuleProperties.OBJECT_STORE_DEFAULT_IN_MEMORY_NAME);
+        this.setPersistent(false);
     }
 
     @Override
     public void initialise() throws InitialisationException {
+        logger.debug("objstore init");
         try {
             resourceManager = new ObjectStoreXAResourceManager(this, muleContext);
             resourceManager.start();
@@ -95,36 +98,32 @@ public class TransactionAwareObjectStore<T extends Serializable> implements List
 
     @Override
     public void store(Serializable key, T value) throws ObjectStoreException {
-
+        logger.debug("objstore store");
         Transaction tx = TransactionCoordination.getInstance().getTransaction();
-
+        getStore().store(key, value);
         try {
-            if (tx == null || tx.getStatus() == Transaction.STATUS_COMMITTING)
-                getStore().store(key, value);
-            else {
-                final Serializable finalId = key;
-                final Serializable finalValue = value;
+            final Serializable finalId = key;
+            final Serializable finalValue = value;
 
-                ObjectStoreXASession session = new ObjectStoreXASession(resourceManager, new Map.Entry<Serializable, Serializable>() {
+            ObjectStoreXASession session = new ObjectStoreXASession(resourceManager, new Map.Entry<Serializable, Serializable>() {
 
-                    @Override
-                    public Serializable getKey() {
-                        return finalId;
-                    }
+                @Override
+                public Serializable getKey() {
+                    return finalId;
+                }
 
-                    @Override
-                    public Serializable getValue() {
-                        return finalValue;
-                    }
+                @Override
+                public Serializable getValue() {
+                    return finalValue;
+                }
 
-                    @Override
-                    public Serializable setValue(Serializable s) {
-                        return null;
-                    }
-                });
+                @Override
+                public Serializable setValue(Serializable s) {
+                    return null;
+                }
+            });
 
-                tx.bindResource(this.getClass().getName(), session);
-            }
+            tx.bindResource(this.getClass().getName(), session);
 
         } catch (Exception e) {
             throw new ObjectStoreException(e);
@@ -138,6 +137,7 @@ public class TransactionAwareObjectStore<T extends Serializable> implements List
 
     @Override
     public void open() throws ObjectStoreException {
+        logger.debug("objstore open");
         ListableObjectStore<T> store = getStore();
         if (store != null) {
             store.open();
@@ -146,6 +146,7 @@ public class TransactionAwareObjectStore<T extends Serializable> implements List
 
     @Override
     public void close() throws ObjectStoreException {
+        logger.debug("objstore close");
         ListableObjectStore<T> store = getStore();
         if (store != null) {
             getStore().close();
